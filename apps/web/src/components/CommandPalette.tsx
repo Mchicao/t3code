@@ -34,6 +34,7 @@ import {
   FolderIcon,
   FolderPlusIcon,
   LinkIcon,
+  MonitorIcon,
   MessageSquareIcon,
   PaletteIcon,
   SettingsIcon,
@@ -163,10 +164,10 @@ function projectFavicon(project: Project) {
         faviconPath={project.faviconPath}
         className={ITEM_ICON_CLASS}
       />
-      <span
+      <MonitorIcon
         aria-hidden="true"
-        className="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-1 ring-background"
-        style={{ backgroundColor: deriveEnvironmentAccentColor(project.environmentId) }}
+        className="absolute -right-1 -bottom-1 size-2.5 rounded-sm bg-background"
+        style={{ color: deriveEnvironmentAccentColor(project.environmentId) }}
       />
     </span>
   );

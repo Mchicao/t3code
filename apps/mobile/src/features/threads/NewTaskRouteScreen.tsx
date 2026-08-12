@@ -287,6 +287,9 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               const selectionTarget = getProjectScopeSelectionTarget(scope, selectedEnvironmentId);
               const environmentLabel =
                 environmentLabelById.get(selectionTarget.environmentId) ?? null;
+              const environmentAccentColor = deriveEnvironmentAccentColor(
+                selectionTarget.environmentId,
+              );
               const description = hasMultipleProjects
                 ? `${scope.projects.length} workspaces`
                 : buildProjectPickerDescription({
@@ -304,7 +307,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                     onPress={() => void selectProject(selectionTarget)}
                     className="flex-row items-center gap-3 bg-card px-4 py-3.5"
                   >
-                    <View className="relative h-7 w-7 items-center justify-center">
+                    <View className="h-7 w-7 items-center justify-center">
                       <ProjectFavicon
                         environmentId={scope.representative.environmentId}
                         faviconPath={scope.representative.faviconPath}
@@ -312,16 +315,14 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                         projectTitle={scope.title}
                         workspaceRoot={scope.representative.workspaceRoot}
                       />
-                      <View
-                        accessibilityLabel={`Computer color for ${environmentLabel ?? selectionTarget.environmentId}`}
-                        className="absolute right-0 bottom-0 h-2 w-2 rounded-full border border-card"
-                        style={{
-                          backgroundColor: deriveEnvironmentAccentColor(
-                            selectionTarget.environmentId,
-                          ),
-                        }}
-                      />
                     </View>
+                    <SymbolView
+                      accessibilityLabel={`Computer: ${environmentLabel ?? selectionTarget.environmentId}`}
+                      name="desktopcomputer"
+                      size={16}
+                      tintColor={environmentAccentColor}
+                      type="monochrome"
+                    />
                     <View className="min-w-0 flex-1">
                       <Text className="text-base leading-snug font-t3-bold">{scope.title}</Text>
                       <Text
