@@ -99,6 +99,7 @@ export function DraftHeroHeadline({
       ),
     [projectPickerEntries],
   );
+  const activeProjectEntry = projectPickerEntries.find((entry) => entry.isPreferred) ?? null;
   const activeProjectGroup =
     activeProjectRef === null
       ? null
@@ -107,7 +108,14 @@ export function DraftHeroHeadline({
             (projectRef) => scopedProjectKey(projectRef) === scopedProjectKey(activeProjectRef),
           ),
         ) ?? null);
-  const activeProjectKey = activeProjectRef ? scopedProjectKey(activeProjectRef) : "";
+  const activeProjectKey = activeProjectRef
+    ? activeProjectEntry
+      ? scopedProjectKey({
+          environmentId: activeProjectEntry.targetProject.environmentId,
+          projectId: activeProjectEntry.targetProject.id,
+        })
+      : scopedProjectKey(activeProjectRef)
+    : "";
   const activeProjectDisplayName = activeProjectGroup?.displayName ?? activeProjectTitle;
   const hasResolvedProject = activeProjectTitle !== null;
   const canChooseProject = projectPickerEntries.length > 0;

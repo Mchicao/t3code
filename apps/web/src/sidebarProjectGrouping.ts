@@ -163,11 +163,14 @@ export function buildExpandedSidebarProjectPickerEntries(input: {
 }): SidebarProjectPickerEntry[] {
   const entries = input.groups.flatMap((group): SidebarProjectPickerEntry[] => {
     const preferredProject = input.preferredProjectRef
-      ? group.memberProjects.find(
+      ? (group.memberProjects.find(
           (project) =>
             project.environmentId === input.preferredProjectRef?.environmentId &&
             project.id === input.preferredProjectRef?.projectId,
-        )
+        ) ??
+        group.memberProjects.find(
+          (project) => project.environmentId === input.preferredProjectRef?.environmentId,
+        ))
       : undefined;
     const targetProject =
       group.memberProjects.find(
@@ -190,8 +193,9 @@ export function buildExpandedSidebarProjectPickerEntries(input: {
       group,
       targetProject: project,
       isPreferred:
-        project.environmentId === input.preferredProjectRef?.environmentId &&
-        project.id === input.preferredProjectRef?.projectId,
+        preferredProject !== undefined &&
+        project.environmentId === preferredProject.environmentId &&
+        project.id === preferredProject.id,
     }));
   });
   const preferredIndex = entries.findIndex((entry) => entry.isPreferred);
