@@ -2,13 +2,17 @@ import type { ScopedProjectRef } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { FolderPlusIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
+import {
+  buildProjectPickerDescription,
+  deriveEnvironmentAccentColor,
+} from "@t3tools/client-runtime/state/project-grouping";
 
 import { openCommandPalette } from "~/commandPaletteBus";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useClientSettings } from "~/hooks/useSettings";
 import { selectProjectGroupingSettings } from "~/logicalProject";
 import {
-  buildSidebarProjectPickerEntries,
+  buildExpandedSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
 } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
@@ -73,14 +77,26 @@ export function DraftHeroHeadline({
   );
   const projectPickerEntries = useMemo(
     () =>
-      buildSidebarProjectPickerEntries({
+      buildExpandedSidebarProjectPickerEntries({
         groups: projectGroups,
         preferredProjectRef: activeProjectRef,
       }),
     [activeProjectRef, projectGroups],
   );
   const projectEntryByKey = useMemo(
-    () => new Map(projectPickerEntries.map((entry) => [entry.group.projectKey, entry] as const)),
+    () =>
+      new Map(
+        projectPickerEntries.map(
+          (entry) =>
+            [
+              scopedProjectKey({
+                environmentId: entry.targetProject.environmentId,
+                projectId: entry.targetProject.id,
+              }),
+              entry,
+            ] as const,
+        ),
+      ),
     [projectPickerEntries],
   );
   const activeProjectGroup =
@@ -91,7 +107,7 @@ export function DraftHeroHeadline({
             (projectRef) => scopedProjectKey(projectRef) === scopedProjectKey(activeProjectRef),
           ),
         ) ?? null);
-  const activeProjectKey = activeProjectGroup?.projectKey ?? "";
+  const activeProjectKey = activeProjectRef ? scopedProjectKey(activeProjectRef) : "";
   const activeProjectDisplayName = activeProjectGroup?.displayName ?? activeProjectTitle;
   const hasResolvedProject = activeProjectTitle !== null;
   const canChooseProject = projectPickerEntries.length > 0;
@@ -106,7 +122,10 @@ export function DraftHeroHeadline({
       >
         {activeProjectDisplayName ?? "Choose a project"}
       </MenuTrigger>
-      <MenuPopup align="center" className="max-h-80 min-w-40! w-max max-w-64 overflow-y-auto">
+      <MenuPopup
+        align="center"
+        className="max-h-80 min-w-72! w-max max-w-[min(90vw,36rem)] overflow-y-auto"
+      >
         <MenuRadioGroup
           value={activeProjectKey}
           onValueChange={(value) => {
@@ -120,11 +139,35 @@ export function DraftHeroHeadline({
             });
           }}
         >
-          {projectPickerEntries.map(({ group }) => {
+          {projectPickerEntries.map(({ group, targetProject }) => {
+            const description = buildProjectPickerDescription({
+              workspaceRoot: targetProject.workspaceRoot,
+              environmentLabel: targetProject.environmentLabel,
+              showEnvironmentLabel: true,
+            });
             return (
-              <MenuRadioItem key={group.projectKey} value={group.projectKey} closeOnClick>
-                <span className="block min-w-0 truncate" title={group.displayName}>
-                  {group.displayName}
+              <MenuRadioItem
+                key={`${targetProject.environmentId}:${targetProject.id}`}
+                value={scopedProjectKey({
+                  environmentId: targetProject.environmentId,
+                  projectId: targetProject.id,
+                })}
+                closeOnClick
+              >
+                <span className="flex min-w-0 items-center gap-2" title={description}>
+                  <span
+                    aria-hidden="true"
+                    className="size-2 shrink-0 rounded-full"
+                    style={{
+                      backgroundColor: deriveEnvironmentAccentColor(targetProject.environmentId),
+                    }}
+                  />
+                  <span className="min-w-0">
+                    <span className="block truncate">{group.displayName}</span>
+                    <span className="block truncate text-muted-foreground text-xs">
+                      {description}
+                    </span>
+                  </span>
                 </span>
               </MenuRadioItem>
             );
