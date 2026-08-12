@@ -14,9 +14,13 @@ describe("composer model picker spacing", () => {
       "utf8",
     );
     const modelPickerCall = chatComposerSource.match(/<ProviderModelPicker[\s\S]*?\/>/)?.[0];
+    const modelPickerScrollerClasses = chatComposerSource
+      .match(/<div className="([^"]*overflow-x-auto[^"]*)">/)?.[1]
+      ?.split(" ");
 
     expect(composerControlSource).toContain("px-2.5");
     expect(modelPickerCall).toContain('triggerClassName="-ms-2.5"');
     expect(modelPickerCall).not.toContain("ps-0");
+    expect(modelPickerScrollerClasses).toEqual(expect.arrayContaining(["-ms-2.5", "ps-2.5"]));
   });
 });
