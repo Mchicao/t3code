@@ -285,6 +285,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
           <View collapsable={false} className="overflow-hidden rounded-[24px] bg-card">
             {projectChoices.map((project, projectIndex) => {
               const environmentLabel = environmentLabelById.get(project.environmentId) ?? null;
+              const environmentAccentColor = deriveEnvironmentAccentColor(project.environmentId);
               const description = buildProjectPickerDescription({
                 workspaceRoot: project.workspaceRoot,
                 environmentLabel,
@@ -300,7 +301,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                     onPress={() => void selectProject(project)}
                     className="flex-row items-center gap-3 bg-card px-4 py-3.5"
                   >
-                    <View className="relative h-7 w-7 items-center justify-center">
+                    <View className="h-7 w-7 items-center justify-center">
                       <ProjectFavicon
                         environmentId={project.environmentId}
                         faviconPath={project.faviconPath}
@@ -308,14 +309,14 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                         projectTitle={project.title}
                         workspaceRoot={project.workspaceRoot}
                       />
-                      <View
-                        accessibilityLabel={`Computer color for ${environmentLabel ?? project.environmentId}`}
-                        className="absolute right-0 bottom-0 h-2 w-2 rounded-full border border-card"
-                        style={{
-                          backgroundColor: deriveEnvironmentAccentColor(project.environmentId),
-                        }}
-                      />
                     </View>
+                    <SymbolView
+                      accessibilityLabel={`Computer: ${environmentLabel ?? project.environmentId}`}
+                      name="desktopcomputer"
+                      size={16}
+                      tintColor={environmentAccentColor}
+                      type="monochrome"
+                    />
                     <View className="min-w-0 flex-1">
                       <Text className="text-base leading-snug font-t3-bold">{project.title}</Text>
                       <Text

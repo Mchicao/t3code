@@ -1,6 +1,6 @@
 import type { ScopedProjectRef } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { FolderPlusIcon } from "lucide-react";
+import { FolderPlusIcon, MonitorIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import {
   buildProjectPickerDescription,
@@ -163,11 +163,11 @@ export function DraftHeroHeadline({
                 closeOnClick
               >
                 <span className="flex min-w-0 items-center gap-2" title={description}>
-                  <span
+                  <MonitorIcon
                     aria-hidden="true"
-                    className="size-2 shrink-0 rounded-full"
+                    className="size-3 shrink-0"
                     style={{
-                      backgroundColor: deriveEnvironmentAccentColor(targetProject.environmentId),
+                      color: deriveEnvironmentAccentColor(targetProject.environmentId),
                     }}
                   />
                   <span className="min-w-0">
