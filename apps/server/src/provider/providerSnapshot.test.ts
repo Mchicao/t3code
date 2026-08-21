@@ -2,8 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 import type { ModelCapabilities } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { createModelCapabilities } from "@t3tools/shared/model";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -133,4 +135,41 @@ describe("ProviderCommandNotFoundError", () => {
       expect(error.message).not.toContain("secret-token-value");
     });
   });
+
+  it.effect("closes stdin for commands that wait for EOF", () =>
+    Effect.gen(function* () {
+      const stdinClosed = yield* Deferred.make<void>();
+      const stdin = Sink.ensuring(
+        Sink.drain,
+        Deferred.succeed(stdinClosed, undefined).pipe(Effect.asVoid),
+      );
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            exitCode: Deferred.await(stdinClosed).pipe(
+              Effect.map(() => ChildProcessSpawner.ExitCode(0)),
+            ),
+            isRunning: Effect.succeed(false),
+            kill: () => Effect.void,
+            unref: Effect.succeed(Effect.void),
+            stdin,
+            stdout: Stream.empty,
+            stderr: Stream.empty,
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          }),
+        ),
+      );
+
+      const result = yield* spawnAndCollect("provider", ChildProcess.make("provider", [])).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.timeoutOption("1 second"),
+      );
+
+      expect(Option.isSome(result)).toBe(true);
+      expect(Option.getOrThrow(result).code).toBe(0);
+    }),
+  );
 });

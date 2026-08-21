@@ -81,6 +81,7 @@ export const spawnAndCollect = (binaryPath: string, command: ChildProcess.Comman
         collectStreamAsString(child.stdout),
         collectStreamAsString(child.stderr),
         child.exitCode.pipe(Effect.map(Number)),
+        Stream.run(Stream.empty, child.stdin),
       ],
       { concurrency: "unbounded" },
     );

@@ -59,6 +59,20 @@ export function ProviderIcon(props: ProviderIconProps) {
     );
   }
 
+  // Antigravity mark: four-point spark, monochrome like the codex fallback.
+  if (props.provider === "agy") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+        <Path fill={mono} d="M12 1.5 14.1 9.9 22.5 12 14.1 14.1 12 22.5 9.9 14.1 1.5 12 9.9 9.9Z" />
+        <Path
+          fill={mono}
+          d="M18.8 4.1 17.9 7.4 14.6 8.3 17.9 9.2 18.8 12.5 19.7 9.2 23 8.3 19.7 7.4Z"
+          opacity={0.55}
+        />
+      </Svg>
+    );
+  }
+
   // codex (and unknown drivers)
   return (
     <Svg width={size} height={size} viewBox="0 0 256 260" fill="none">

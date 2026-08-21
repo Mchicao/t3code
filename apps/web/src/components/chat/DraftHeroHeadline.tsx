@@ -2,13 +2,17 @@ import type { ScopedProjectRef } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { FolderPlusIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
+import {
+  buildProjectPickerDescription,
+  deriveEnvironmentAccentColor,
+} from "@t3tools/client-runtime/state/project-grouping";
 
 import { openCommandPalette } from "~/commandPaletteBus";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useClientSettings } from "~/hooks/useSettings";
 import { selectProjectGroupingSettings } from "~/logicalProject";
 import {
-  buildSidebarProjectPickerEntries,
+  buildExpandedSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
 } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
@@ -74,14 +78,26 @@ export function DraftHeroHeadline({
   );
   const projectPickerEntries = useMemo(
     () =>
-      buildSidebarProjectPickerEntries({
+      buildExpandedSidebarProjectPickerEntries({
         groups: projectGroups,
         preferredProjectRef: activeProjectRef,
       }),
     [activeProjectRef, projectGroups],
   );
   const projectEntryByKey = useMemo(
-    () => new Map(projectPickerEntries.map((entry) => [entry.group.projectKey, entry] as const)),
+    () =>
+      new Map(
+        projectPickerEntries.map(
+          (entry) =>
+            [
+              scopedProjectKey({
+                environmentId: entry.targetProject.environmentId,
+                projectId: entry.targetProject.id,
+              }),
+              entry,
+            ] as const,
+        ),
+      ),
     [projectPickerEntries],
   );
   const activeProjectGroup =
@@ -92,7 +108,7 @@ export function DraftHeroHeadline({
             (projectRef) => scopedProjectKey(projectRef) === scopedProjectKey(activeProjectRef),
           ),
         ) ?? null);
-  const activeProjectKey = activeProjectGroup?.projectKey ?? "";
+  const activeProjectKey = activeProjectRef ? scopedProjectKey(activeProjectRef) : "";
   const activeProjectDisplayName = activeProjectGroup?.displayName ?? activeProjectTitle;
   const hasResolvedProject = activeProjectTitle !== null;
   const canChooseProject = projectPickerEntries.length > 0;

@@ -29,6 +29,7 @@ import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
+import { CodexSessionImportLive } from "./provider/Layers/CodexSessionImport.ts";
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
 import * as ProviderEventLoggers from "./provider/Layers/ProviderEventLoggers.ts";
@@ -647,19 +648,22 @@ export const makeServerLayer = Layer.unwrap(
       }),
     );
 
-    const runtimeServicesLive = ServerRuntimeStartup.layerWithOptions({
-      activate: Deferred.succeed(activation, undefined).pipe(Effect.asVoid),
-      abort: (error) => Deferred.die(activation, error).pipe(Effect.asVoid),
-      awaitAuxiliaryParked: Effect.all(
-        [
-          Deferred.await(runtimeStateParked),
-          Deferred.await(cloudLinkParked),
-          Deferred.await(routesReady),
-          ...(config.tailscaleServeEnabled ? [Deferred.await(tailscaleParked)] : []),
-        ],
-        { concurrency: "unbounded" },
-      ).pipe(Effect.asVoid),
-    }).pipe(Layer.provideMerge(RuntimeDependenciesLive), Layer.provide(launcherLayer));
+    const runtimeServicesLive = Layer.mergeAll(
+      ServerRuntimeStartup.layerWithOptions({
+        activate: Deferred.succeed(activation, undefined).pipe(Effect.asVoid),
+        abort: (error) => Deferred.die(activation, error).pipe(Effect.asVoid),
+        awaitAuxiliaryParked: Effect.all(
+          [
+            Deferred.await(runtimeStateParked),
+            Deferred.await(cloudLinkParked),
+            Deferred.await(routesReady),
+            ...(config.tailscaleServeEnabled ? [Deferred.await(tailscaleParked)] : []),
+          ],
+          { concurrency: "unbounded" },
+        ).pipe(Effect.asVoid),
+      }),
+      CodexSessionImportLive,
+    ).pipe(Layer.provideMerge(RuntimeDependenciesLive), Layer.provide(launcherLayer));
 
     const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
       disableLogger: !config.logWebSocketEvents,

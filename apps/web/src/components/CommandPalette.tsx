@@ -155,21 +155,32 @@ import type { ChatComposerHandle } from "./chat/ChatComposer";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import {
-  buildSidebarProjectPickerEntries,
+  buildExpandedSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
 } from "../sidebarProjectGrouping";
 import type { Project } from "../types";
+import {
+  buildProjectPickerDescription,
+  deriveEnvironmentAccentColor,
+} from "@t3tools/client-runtime/state/project-grouping";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 
 function projectFavicon(project: Project) {
   return (
-    <ProjectFavicon
-      environmentId={project.environmentId}
-      cwd={project.workspaceRoot}
-      faviconPath={project.faviconPath}
-      className={ITEM_ICON_CLASS}
-    />
+    <span className="relative inline-flex size-4 shrink-0 items-center justify-center">
+      <ProjectFavicon
+        environmentId={project.environmentId}
+        cwd={project.workspaceRoot}
+        faviconPath={project.faviconPath}
+        className={ITEM_ICON_CLASS}
+      />
+      <span
+        aria-hidden="true"
+        className="absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-1 ring-background"
+        style={{ backgroundColor: deriveEnvironmentAccentColor(project.environmentId) }}
+      />
+    </span>
   );
 }
 
@@ -728,7 +739,7 @@ function OpenCommandPaletteDialog(props: {
   );
   const projectPickerEntries = useMemo(
     () =>
-      buildSidebarProjectPickerEntries({
+      buildExpandedSidebarProjectPickerEntries({
         groups: projectGroups,
         preferredProjectRef: contextualProjectRef,
       }),
@@ -740,6 +751,20 @@ function OpenCommandPaletteDialog(props: {
         ...targetProject,
         title: group.displayName,
       })),
+    [projectPickerEntries],
+  );
+  const projectPickerDescriptionByKey = useMemo(
+    () =>
+      new Map(
+        projectPickerEntries.map(({ targetProject }) => [
+          `${targetProject.environmentId}:${targetProject.id}`,
+          buildProjectPickerDescription({
+            workspaceRoot: targetProject.workspaceRoot,
+            environmentLabel: targetProject.environmentLabel,
+            showEnvironmentLabel: true,
+          }),
+        ]),
+      ),
     [projectPickerEntries],
   );
   const projectGroupByTargetKey = useMemo(
@@ -1014,13 +1039,20 @@ function OpenCommandPaletteDialog(props: {
         searchTerms: (project) => {
           const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
           return (
-            group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ?? []
+            group?.memberProjects.flatMap((member) => [
+              member.title,
+              member.workspaceRoot,
+              member.environmentLabel ?? "",
+            ]) ?? []
           );
         },
+        description: (project) =>
+          projectPickerDescriptionByKey.get(`${project.environmentId}:${project.id}`) ??
+          project.workspaceRoot,
         icon: projectFavicon,
         runProject: openProjectFromSearch,
       }),
-    [openProjectFromSearch, pickerProjects, projectGroupByTargetKey],
+    [openProjectFromSearch, pickerProjects, projectGroupByTargetKey, projectPickerDescriptionByKey],
   );
 
   const projectThreadItems = useMemo(

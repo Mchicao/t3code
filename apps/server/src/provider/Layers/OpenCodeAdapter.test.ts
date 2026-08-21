@@ -2,6 +2,7 @@ import * as NodeAssert from "node:assert/strict";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -16,9 +17,11 @@ import * as TestClock from "effect/testing/TestClock";
 import { beforeEach } from "vite-plus/test";
 
 import {
+  ApprovalRequestId,
   OpenCodeSettings,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ProviderRuntimeEvent,
   ThreadId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -61,6 +64,7 @@ const runtimeMock = {
     sessionCreateInputs: [] as Array<Record<string, unknown>>,
     authHeaders: [] as Array<string | null>,
     abortCalls: [] as string[],
+    permissionReplyCalls: [] as Array<{ requestID: string; reply: string }>,
     closeCalls: [] as string[],
     revertCalls: [] as Array<{ sessionID: string; messageID?: string }>,
     promptCalls: [] as Array<unknown>,
@@ -81,6 +85,7 @@ const runtimeMock = {
     this.state.sessionCreateInputs.length = 0;
     this.state.authHeaders.length = 0;
     this.state.abortCalls.length = 0;
+    this.state.permissionReplyCalls.length = 0;
     this.state.closeCalls.length = 0;
     this.state.revertCalls.length = 0;
     this.state.promptCalls.length = 0;
@@ -201,6 +206,11 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
             targetIndex >= 0
               ? runtimeMock.state.messages.slice(0, targetIndex + 1)
               : runtimeMock.state.messages;
+        },
+      },
+      permission: {
+        reply: async ({ requestID, reply }: { requestID: string; reply: string }) => {
+          runtimeMock.state.permissionReplyCalls.push({ requestID, reply });
         },
       },
       event: {
@@ -625,6 +635,136 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         events.map((event) => event.type),
         ["session.started", "thread.started", "session.exited"],
       );
+    }),
+  );
+
+  it.effect("routes descendant-session permissions to the parent thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-child-permission");
+      const rootSessionId = "http://127.0.0.1:9999/session";
+      const childSessionId = "ses_child";
+      const opened = yield* Deferred.make<ProviderRuntimeEvent>();
+      const cancelled = yield* Deferred.make<ProviderRuntimeEvent>();
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => {
+          if (event.type === "request.opened") {
+            return Deferred.succeed(opened, event).pipe(Effect.asVoid);
+          }
+          if (event.type === "request.resolved") {
+            return Deferred.succeed(cancelled, event).pipe(Effect.asVoid);
+          }
+          return Effect.void;
+        }),
+        Effect.forkChild,
+      );
+      const openedFiber = yield* Deferred.await(opened).pipe(
+        Effect.timeout("1 second"),
+        Effect.forkChild,
+      );
+      runtimeMock.state.subscribedEvents = [
+        {
+          type: "session.created",
+          properties: {
+            sessionID: childSessionId,
+            info: { id: childSessionId, parentID: rootSessionId },
+          },
+        },
+        {
+          type: "permission.asked",
+          properties: {
+            id: "perm-child-1",
+            sessionID: childSessionId,
+            permission: "external_directory",
+            patterns: ["/tmp/outside-project.md"],
+            metadata: {},
+          },
+        },
+      ];
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "approval-required",
+      });
+
+      yield* advanceTestClock(10);
+      yield* advanceTestClock(1_000);
+      const openedEvent = yield* Fiber.join(openedFiber);
+      NodeAssert.equal(openedEvent.type, "request.opened");
+      if (openedEvent.type === "request.opened") {
+        NodeAssert.equal(openedEvent.requestId, "perm-child-1");
+        NodeAssert.equal(openedEvent.payload.requestType, "file_read_approval");
+      }
+
+      yield* adapter.respondToRequest(threadId, ApprovalRequestId.make("perm-child-1"), "accept");
+      NodeAssert.deepEqual(runtimeMock.state.permissionReplyCalls, [
+        { requestID: "perm-child-1", reply: "once" },
+      ]);
+      yield* adapter.stopSession(threadId);
+      yield* Deferred.await(cancelled);
+      yield* Fiber.interrupt(eventsFiber);
+    }),
+  );
+
+  it.effect("cancels pending permissions when stopping a session", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-pending-permission");
+      const opened = yield* Deferred.make<ProviderRuntimeEvent>();
+      const resolved = yield* Deferred.make<ProviderRuntimeEvent>();
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => {
+          if (event.type === "request.opened") {
+            return Deferred.succeed(opened, event).pipe(Effect.asVoid);
+          }
+          if (event.type === "request.resolved") {
+            return Deferred.succeed(resolved, event).pipe(Effect.asVoid);
+          }
+          return Effect.void;
+        }),
+        Effect.forkChild,
+      );
+      const openedFiber = yield* Deferred.await(opened).pipe(
+        Effect.timeout("1 second"),
+        Effect.forkChild,
+      );
+      const resolvedFiber = yield* Deferred.await(resolved).pipe(
+        Effect.timeout("1 second"),
+        Effect.forkChild,
+      );
+      runtimeMock.state.subscribedEvents = [
+        {
+          type: "permission.asked",
+          properties: {
+            id: "perm-stop-1",
+            sessionID: "http://127.0.0.1:9999/session",
+            permission: "grep",
+            patterns: ["*.ts"],
+            metadata: {},
+          },
+        },
+      ];
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "auto",
+      });
+      yield* advanceTestClock(10);
+      yield* Fiber.join(openedFiber);
+      yield* adapter.stopSession(threadId);
+
+      yield* advanceTestClock(10);
+      yield* advanceTestClock(1_000);
+      const resolvedEvent = yield* Fiber.join(resolvedFiber);
+      NodeAssert.equal(resolvedEvent.type, "request.resolved");
+      if (resolvedEvent.type === "request.resolved") {
+        NodeAssert.equal(resolvedEvent.requestId, "perm-stop-1");
+        NodeAssert.equal(resolvedEvent.payload.requestType, "command_execution_approval");
+        NodeAssert.equal(resolvedEvent.payload.decision, "cancel");
+      }
+      yield* Fiber.interrupt(eventsFiber);
     }),
   );
 

@@ -7,7 +7,12 @@ import {
 } from "@react-navigation/native";
 import { SymbolView } from "../../components/AppSymbol";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-import { useEffect, useRef } from "react";
+import {
+  buildProjectPickerDescription,
+  deriveEnvironmentAccentColor,
+  derivePhysicalProjectKey,
+} from "@t3tools/client-runtime/state/project-grouping";
+import { useEffect, useMemo, useRef } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -17,12 +22,13 @@ import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../components/AppText";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { useProjects } from "../../state/entities";
+import { useEnvironments } from "../../state/environments";
 import type { WorkspaceState } from "../../state/workspaceModel";
 import { useWorkspaceState } from "../../state/workspace";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import { useNewTaskFlow } from "./new-task-flow-provider";
-import { getProjectScopeSelectionTarget } from "./new-task-project-selection";
+import { scopedProjectKey } from "../../lib/scopedEntities";
 
 type NewTaskRouteParams = {
   readonly incomingShareId?: string | string[];
@@ -85,7 +91,8 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
 
 export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRouteParams | undefined>) {
   const projects = useProjects();
-  const { projectScopes, selectedEnvironmentId, setProject } = useNewTaskFlow();
+  const { projectScopes, setProject } = useNewTaskFlow();
+  const { environments } = useEnvironments();
   const { state: catalogState } = useWorkspaceState();
   const navigation = useNavigation();
   const isFocused = useIsFocused();
@@ -107,6 +114,22 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
     : null;
   const screenTitle = incomingShare ? "Start a task" : "Choose project";
   const projectEmptyState = deriveProjectEmptyState(catalogState);
+  const environmentLabelById = useMemo(
+    () =>
+      new Map(environments.map((environment) => [environment.environmentId, environment.label])),
+    [environments],
+  );
+  const projectChoices = useMemo(() => {
+    const seen = new Set<string>();
+    return projectScopes
+      .flatMap((scope) => scope.projects)
+      .filter((project) => {
+        const key = derivePhysicalProjectKey(project);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [projectScopes]);
   const resumedDestinationKeyRef = useRef<string | null>(null);
   const reservedDestinationProject = incomingShare?.destination
     ? (projects.find(
@@ -240,7 +263,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
           paddingTop: 8,
         }}
       >
-        {projectScopes.length === 0 ? (
+        {projectChoices.length === 0 ? (
           <View collapsable={false} className="items-center gap-3 rounded-[24px] bg-card px-6 py-8">
             {projectEmptyState.loading ? <ActivityIndicator color={accentColor} /> : null}
             <Text className="text-center text-lg font-t3-bold text-foreground">
@@ -271,38 +294,48 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
           </View>
         ) : (
           <View collapsable={false} className="overflow-hidden rounded-[24px] bg-card">
-            {projectScopes.map((scope, scopeIndex) => {
-              const hasMultipleProjects = scope.projects.length > 1;
-              const selectionTarget = getProjectScopeSelectionTarget(scope, selectedEnvironmentId);
+            {projectChoices.map((project, projectIndex) => {
+              const environmentLabel = environmentLabelById.get(project.environmentId) ?? null;
+              const description = buildProjectPickerDescription({
+                workspaceRoot: project.workspaceRoot,
+                environmentLabel,
+                showEnvironmentLabel: true,
+              });
               return (
                 <View
-                  key={scope.key}
-                  className={cn(scopeIndex > 0 && "border-t border-border-subtle")}
+                  key={scopedProjectKey(project.environmentId, project.id)}
+                  className={cn(projectIndex > 0 && "border-t border-border-subtle")}
                 >
                   <Pressable
                     disabled={reservedDestinationProject !== null}
-                    onPress={() => void selectProject(selectionTarget)}
+                    onPress={() => void selectProject(project)}
                     className="flex-row items-center gap-3 bg-card px-4 py-3.5"
                   >
-                    <View className="h-7 w-7 items-center justify-center">
+                    <View className="relative h-7 w-7 items-center justify-center">
                       <ProjectFavicon
-                        environmentId={scope.representative.environmentId}
-                        faviconPath={scope.representative.faviconPath}
+                        environmentId={project.environmentId}
+                        faviconPath={project.faviconPath}
                         size={20}
-                        projectTitle={scope.title}
-                        workspaceRoot={scope.representative.workspaceRoot}
+                        projectTitle={project.title}
+                        workspaceRoot={project.workspaceRoot}
+                      />
+                      <View
+                        accessibilityLabel={`Computer color for ${environmentLabel ?? project.environmentId}`}
+                        className="absolute right-0 bottom-0 h-2 w-2 rounded-full border border-card"
+                        style={{
+                          backgroundColor: deriveEnvironmentAccentColor(project.environmentId),
+                        }}
                       />
                     </View>
                     <View className="min-w-0 flex-1">
-                      <Text className="text-base leading-snug font-t3-bold">{scope.title}</Text>
+                      <Text className="text-base leading-snug font-t3-bold">{project.title}</Text>
                       <Text
+                        accessibilityLabel={description}
                         className="text-xs leading-snug text-foreground-muted"
-                        ellipsizeMode="middle"
-                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                        numberOfLines={2}
                       >
-                        {hasMultipleProjects
-                          ? `${scope.projects.length} workspaces`
-                          : selectionTarget.workspaceRoot}
+                        {description}
                       </Text>
                     </View>
                     <SymbolView

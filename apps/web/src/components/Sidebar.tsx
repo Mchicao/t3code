@@ -92,6 +92,7 @@ import { readLocalApi } from "../localApi";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
 import {
   buildSidebarProjectSnapshots,
+  type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
@@ -104,6 +105,7 @@ import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
+import { CodexSessionImportDialog } from "./CodexSessionImportDialog";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
@@ -1780,6 +1782,9 @@ export default function Sidebar() {
     },
   });
   const [projectScopeMenuOpen, setProjectScopeMenuOpen] = useState(false);
+  const [codexImportTarget, setCodexImportTarget] = useState<SidebarProjectGroupMember | null>(
+    null,
+  );
   const newThreadContext = useHandleNewThread();
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
@@ -3501,6 +3506,11 @@ export default function Sidebar() {
                       </MenuRadioItem>
                       {projectGroups.map((project) => {
                         const scopeKey = project.projectKey;
+                        const codexImportProject = project.memberProjects.find(
+                          (member) =>
+                            serverConfigs.get(member.environmentId)?.environment.capabilities
+                              .codexSessionImport === true,
+                        );
                         return (
                           <MenuRadioItem
                             key={scopeKey}
@@ -3528,6 +3538,24 @@ export default function Sidebar() {
                             >
                               <SettingsIcon className="size-3.5" />
                             </Button>
+                            {codexImportProject ? (
+                              <Button
+                                size="icon-xs"
+                                variant="ghost-muted"
+                                aria-label={`Import Codex sessions for ${project.displayName}`}
+                                title="Import Codex sessions"
+                                className="size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  setProjectScopeMenuOpen(false);
+                                  setCodexImportTarget(codexImportProject);
+                                }}
+                              >
+                                <MessageSquareIcon className="size-3.5" />
+                              </Button>
+                            ) : null}
                           </MenuRadioItem>
                         );
                       })}
@@ -3907,6 +3935,13 @@ export default function Sidebar() {
           ) : null}
         </SidebarGroup>
       </SidebarContent>
+      <CodexSessionImportDialog
+        open={codexImportTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setCodexImportTarget(null);
+        }}
+        project={codexImportTarget}
+      />
       <SidebarChromeFooter />
     </>
   );

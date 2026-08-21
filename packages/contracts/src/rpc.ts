@@ -66,6 +66,13 @@ import {
   OrchestrationRpcSchemas,
   OrchestrationGetWorkflowScriptError,
 } from "./orchestration.ts";
+import {
+  CodexSessionImportError,
+  CodexSessionImportInput,
+  CodexSessionImportResult,
+  CodexSessionListInput,
+  CodexSessionListResult,
+} from "./codexSessions.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActionInput,
@@ -203,6 +210,10 @@ export const WS_METHODS = {
   projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
+
+  // Codex session continuity
+  codexListSessions: "codex.listSessions",
+  codexImportSessions: "codex.importSessions",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -648,6 +659,18 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   error: Schema.Union([ProjectWriteFileError, EnvironmentAuthorizationError]),
 });
 
+export const WsCodexListSessionsRpc = Rpc.make(WS_METHODS.codexListSessions, {
+  payload: CodexSessionListInput,
+  success: CodexSessionListResult,
+  error: Schema.Union([CodexSessionImportError, EnvironmentAuthorizationError]),
+});
+
+export const WsCodexImportSessionsRpc = Rpc.make(WS_METHODS.codexImportSessions, {
+  payload: CodexSessionImportInput,
+  success: CodexSessionImportResult,
+  error: Schema.Union([CodexSessionImportError, EnvironmentAuthorizationError]),
+});
+
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: LaunchEditorInput,
   error: Schema.Union([ExternalLauncherError, EnvironmentAuthorizationError]),
@@ -1031,6 +1054,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsSearchContentsRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
+  WsCodexListSessionsRpc,
+  WsCodexImportSessionsRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
   WsAssetsCreateUrlRpc,
