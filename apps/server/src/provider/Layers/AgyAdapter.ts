@@ -1,21 +1,29 @@
 /**
- * AgyAdapter — Antigravity CLI provider adapter over documented headless mode.
+ * AgyAdapter — Antigravity CLI provider adapter over a persistent stream-json
+ * session, the documented interface behind Antigravity's queued-message
+ * steering in the official IDE extensions.
  *
- * One `agy -p <prompt> --output-format stream-json` process per turn; the
- * NDJSON event stream (init → step_update* → result) is mapped onto
- * `ProviderRuntimeEvent`s. Conversation continuity across turns comes from
- * the run's `conversation_id`, stored as the session resume cursor and
- * replayed via `--conversation <id>` on the next spawn.
+ * One long-lived `agy --input-format stream-json --output-format stream-json`
+ * process per thread; prompts travel as NDJSON `user` events on stdin and the
+ * NDJSON event stream (init → step_update* → result per turn) is mapped onto
+ * `ProviderRuntimeEvent`s. Conversation continuity comes from the run's
+ * `conversation_id`: stored as the session resume cursor, replayed via
+ * `--conversation <id>` when the process is respawned (model switch, crash,
+ * or interrupt).
  *
- * Known ceilings (deliberate, headless-mode imposed):
- *   - No steering: a sendTurn while a turn is in flight is rejected. Interrupt
- *     + resend is the workaround. Upgrade path: the harness WebSocket
- *     protocol the Python SDK uses supports mid-turn input.
+ * Steering: agy runs one turn per stdin message and expects the previous
+ * turn's `result` before the next prompt, so a sendTurn during an active turn
+ * queues the prompt at the adapter level and it continues the same T3 turn —
+ * matching how the official extensions queue messages mid-task. True mid-turn
+ * injection would require Antigravity's undocumented language-service
+ * protocol (`agentapi`), which the CLI does not expose as of 1.1.17.
+ *
+ * Known ceilings (deliberate):
  *   - No interactive approvals: agy headless soft-denies tools that would
  *     ask, so `respondToRequest`/`respondToUserInput` always fail. Grant
  *     tools via `permissions.allow` in ~/.gemini/antigravity-cli/settings.json.
- *   - Prompts travel as argv, so inputs beyond ~30k chars are rejected
- *     (Windows CreateProcess command-line limit).
+ *   - No watchdog on hung turns: print-mode's `--print-timeout` does not
+ *     apply to streaming sessions; use interruptTurn.
  *
  * @module provider/Layers/AgyAdapter
  */
@@ -59,11 +67,6 @@ import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogg
 const PROVIDER = ProviderDriverKind.make("agy");
 const AGY_RESUME_VERSION = 1 as const;
 const decodeThreadTokenUsageSnapshot = Schema.decodeUnknownSync(ThreadTokenUsageSnapshot);
-/** agy receives the prompt as a command-line argument; keep well under the
- * ~32k Windows CreateProcess limit. */
-const AGY_MAX_PROMPT_ARG_CHARS = 30_000;
-/** agy kills a headless run itself after `--print-timeout`; keep it generous. */
-const AGY_PRINT_TIMEOUT = "2h";
 
 export interface AgyAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
@@ -74,13 +77,22 @@ export interface AgyAdapterLiveOptions {
 
 interface AgyActiveTurn {
   readonly turnId: TurnId;
-  readonly scope: Scope.Closeable;
-  readonly child: ChildProcessSpawner.ChildProcessHandle;
+  /** Steering prompts queued while an agy turn is in flight; each continues
+   * the same T3 turn once agy reports the previous result. */
+  pendingSteers: Array<string>;
   /** Set by interruptTurn before the kill so settlement picks "cancelled". */
   interrupted: boolean;
+  settled: boolean;
   assistantItemId: RuntimeItemId | undefined;
   assistantItemCompleted: boolean;
-  settled: boolean;
+}
+
+/** The long-lived `agy --input-format stream-json` process backing a thread. */
+interface AgySessionProc {
+  readonly scope: Scope.Closeable;
+  readonly child: ChildProcessSpawner.ChildProcessHandle;
+  /** Model the process was spawned with; a model switch respawns it. */
+  readonly model: string | undefined;
 }
 
 interface AgySessionContext {
@@ -88,6 +100,7 @@ interface AgySessionContext {
   session: ProviderSession;
   readonly cwd: string;
   conversationId: string | undefined;
+  sessionProc: AgySessionProc | undefined;
   activeTurn: AgyActiveTurn | undefined;
   turns: Array<{ id: TurnId; items: Array<unknown> }>;
   stopped: boolean;
@@ -159,6 +172,12 @@ export function usageFromAgy(raw: unknown): ThreadTokenUsageSnapshot | undefined
   } catch {
     return undefined;
   }
+}
+
+/** Serialize a prompt as the NDJSON `user` event agy's stream-json input
+ * mode consumes (one turn per line, text blocks only). */
+export function agyUserEventLine(prompt: string): string {
+  return JSON.stringify({ event: "user", message: { content: prompt } });
 }
 
 export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiveOptions) {
@@ -289,13 +308,13 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
 
     const decodeAgyJsonLine = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 
-    const processAgyLine = (ctx: AgySessionContext, turn: AgyActiveTurn, line: string) =>
+    const processAgyLine = (ctx: AgySessionContext, line: string) =>
       Effect.gen(function* () {
         const trimmed = line.trim();
         if (!trimmed) return;
         const parsed = yield* decodeAgyJsonLine(trimmed).pipe(
           Effect.catch(() =>
-            Effect.logWarning("Agy headless emitted a non-JSON stdout line.", {
+            Effect.logWarning("Agy session emitted a non-JSON stdout line.", {
               threadId: ctx.threadId,
               lineLength: trimmed.length,
             }).pipe(Effect.as(null)),
@@ -313,6 +332,10 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
           }
           return;
         }
+
+        if (parsed.event !== "step_update" && parsed.event !== "result") return;
+        const turn = ctx.activeTurn;
+        if (!turn || turn.settled) return;
 
         if (parsed.event === "result") {
           const result = isRecord(parsed.result) ? parsed.result : undefined;
@@ -339,6 +362,33 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
             typeof result?.error === "string" && result.error.trim()
               ? result.error.trim()
               : undefined;
+
+          // A queued steering prompt continues the same T3 turn once agy has
+          // finished its current run; a fresh agy turn starts under the same
+          // turn id with reset assistant-item state.
+          const steeredPrompt = status === "SUCCESS" ? turn.pendingSteers.shift() : undefined;
+          if (steeredPrompt !== undefined) {
+            const proc = ctx.sessionProc;
+            if (proc) {
+              turn.assistantItemId = undefined;
+              turn.assistantItemCompleted = false;
+              yield* writeToAgyStdin(ctx, proc.child, steeredPrompt).pipe(
+                Effect.catch((error: ProviderAdapterRequestError) =>
+                  Effect.gen(function* () {
+                    turn.pendingSteers.length = 0;
+                    yield* settleTurn(ctx, turn, {
+                      state: "failed",
+                      errorMessage: error.detail,
+                      usage,
+                    });
+                  }),
+                ),
+              );
+              return;
+            }
+            turn.pendingSteers.length = 0;
+          }
+
           if (status === "SUCCESS") {
             yield* settleTurn(ctx, turn, { state: "completed", usage });
           } else if (status === "CANCELED" || status === "INTERRUPTED") {
@@ -347,13 +397,20 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
               usage,
             });
           } else if (status === "WAITING" || status === "RUNNING") {
-            // Non-terminal result (headless hit its print timeout or is still
-            // flushing). The exit-code path settles the turn.
-            yield* Effect.logWarning("Agy headless run ended in a non-terminal state.", {
+            // Non-terminal result. Streaming sessions should not emit these;
+            // leave the turn open for the next event or the process exit.
+            yield* Effect.logWarning("Agy session emitted a non-terminal result.", {
               threadId: ctx.threadId,
               status,
             });
           } else {
+            if (turn.pendingSteers.length > 0) {
+              yield* Effect.logWarning(
+                "Dropping steering prompts queued behind a failed Agy turn.",
+                { threadId: ctx.threadId, dropped: turn.pendingSteers.length },
+              );
+              turn.pendingSteers.length = 0;
+            }
             yield* settleTurn(ctx, turn, {
               state: "failed",
               errorMessage: errorDetail ?? `Agy run failed with status ${status}.`,
@@ -363,8 +420,8 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
           return;
         }
 
-        if (parsed.event !== "step_update" || !isRecord(parsed.step_update)) return;
         const step = parsed.step_update;
+        if (!isRecord(step)) return;
         const stepType = typeof step.step_type === "string" ? step.step_type : "";
         const state = typeof step.state === "string" ? step.state : "";
 
@@ -451,59 +508,44 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
         }
       }).pipe(
         Effect.catchCause((cause) =>
-          Effect.logError("Failed to process Agy headless event.", {
+          Effect.logError("Failed to process Agy event.", {
             cause,
             threadId: ctx.threadId,
           }),
         ),
       );
 
-    const runTurn = (ctx: AgySessionContext, input: ProviderSendTurnInput) =>
+    /** Write one NDJSON user event to the session process's stdin. */
+    const writeToAgyStdin = (
+      ctx: AgySessionContext,
+      child: ChildProcessSpawner.ChildProcessHandle,
+      prompt: string,
+    ) =>
+      Stream.run(Stream.encodeText(Stream.make(`${agyUserEventLine(prompt)}\n`)), child.stdin).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "sendTurn",
+              detail: `Failed to write a prompt to the Agy session process stdin: ${cause.message}`,
+              cause,
+            }),
+        ),
+      );
+
+    const killProc = (proc: AgySessionProc): Effect.Effect<void> =>
+      proc.child
+        .kill({ killSignal: "SIGTERM", forceKillAfter: "1 second" })
+        .pipe(Effect.catchCause(() => Effect.void));
+
+    const spawnAgySessionProc = (ctx: AgySessionContext, model: string | undefined) =>
       Effect.gen(function* () {
-        const prompt = input.input?.trim();
-        if (!prompt) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "Turn requires non-empty text input.",
-          });
-        }
-        if (prompt.length > AGY_MAX_PROMPT_ARG_CHARS) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: `Prompt of ${prompt.length} characters exceeds the ${AGY_MAX_PROMPT_ARG_CHARS} character limit for Agy headless mode (the prompt travels as a command-line argument).`,
-          });
-        }
-        if (input.attachments && input.attachments.length > 0) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "sendTurn",
-            issue: "Attachments are not supported by the Agy headless adapter yet.",
-          });
-        }
-        if (ctx.activeTurn) {
-          return yield* new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "sendTurn",
-            detail:
-              "An Agy turn is already in progress for this thread. Interrupt the active turn before sending a new prompt (steering is not supported by agy headless mode).",
-          });
-        }
-
-        const modelSelection =
-          input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
-        const model = modelSelection?.model?.trim() || undefined;
-
-        const turnId = TurnId.make(yield* randomUUIDv4);
-        const turnScope = yield* Scope.make("sequential");
+        const procScope = yield* Scope.make("sequential");
         const args = [
-          "-p",
-          prompt,
+          "--input-format",
+          "stream-json",
           "--output-format",
           "stream-json",
-          "--print-timeout",
-          AGY_PRINT_TIMEOUT,
           ...(model ? ["--model", model] : []),
           ...(ctx.conversationId ? ["--conversation", ctx.conversationId] : []),
           ...tokenizeCliArgs(agySettings.launchArgs),
@@ -522,44 +564,19 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
             }),
           )
           .pipe(
-            Effect.provideService(Scope.Scope, turnScope),
+            Effect.provideService(Scope.Scope, procScope),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterRequestError({
                   provider: PROVIDER,
                   method: "spawn",
-                  detail: `Failed to spawn Agy headless process: ${cause.message}`,
+                  detail: `Failed to spawn the Agy session process: ${cause.message}`,
                   cause,
                 }),
             ),
           );
-
-        const turn: AgyActiveTurn = {
-          turnId,
-          scope: turnScope,
-          child,
-          interrupted: false,
-          assistantItemId: undefined,
-          assistantItemCompleted: false,
-          settled: false,
-        };
-        ctx.activeTurn = turn;
-        ctx.session = {
-          ...ctx.session,
-          status: "running",
-          activeTurnId: turnId,
-          updatedAt: yield* nowIso,
-          ...(model ? { model } : {}),
-        };
-        yield* offerRuntimeEvent({
-          type: "turn.started",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          providerInstanceId: boundInstanceId,
-          threadId: ctx.threadId,
-          turnId,
-          payload: model ? { model } : {},
-        });
+        const proc: AgySessionProc = { scope: procScope, child, model };
+        ctx.sessionProc = proc;
 
         const stdoutRemainderRef = yield* Ref.make("");
         yield* child.stdout.pipe(
@@ -573,43 +590,61 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
             }),
           ),
           Stream.flatMap((lines) => Stream.fromIterable(lines)),
-          Stream.mapEffect((line) => processAgyLine(ctx, turn, line)),
+          Stream.mapEffect((line) => processAgyLine(ctx, line)),
           Stream.runDrain,
           Effect.catchCause((cause) =>
             Effect.logError("Agy stdout processing failed.", { cause, threadId: ctx.threadId }),
           ),
-          Effect.forkIn(turnScope),
+          Effect.forkIn(procScope),
         );
 
-        // Settle from the process exit when the stream produced no terminal
-        // result (hard kill, crash). Detached from turnScope so closing the
-        // scope from here cannot interrupt the closer.
+        // Settle an in-flight turn from the process exit when no terminal
+        // result arrived (interrupt kill, crash, model-switch respawn).
+        // Detached from procScope so closing the scope cannot interrupt the
+        // closer.
         yield* child.exitCode.pipe(
           Effect.flatMap((exitCode) =>
-            settleTurn(ctx, turn, {
-              state: turn.interrupted ? "cancelled" : "failed",
-              ...(turn.interrupted
-                ? {}
-                : {
-                    errorMessage: `Agy headless process exited with code ${exitCode} before producing a result.`,
-                  }),
+            Effect.gen(function* () {
+              if (ctx.sessionProc !== proc) return;
+              ctx.sessionProc = undefined;
+              const turn = ctx.activeTurn;
+              if (!turn || turn.settled || ctx.stopped) return;
+              turn.pendingSteers.length = 0;
+              yield* settleTurn(ctx, turn, {
+                state: turn.interrupted ? "cancelled" : "failed",
+                ...(turn.interrupted
+                  ? {}
+                  : {
+                      errorMessage: `The Agy session process exited with code ${exitCode} before producing a result.`,
+                    }),
+              });
             }),
           ),
-          Effect.flatMap(() => Scope.close(turnScope, Exit.void)),
+          Effect.flatMap(() => Scope.close(procScope, Exit.void)),
           Effect.catchCause((cause) =>
-            Effect.logError("Agy exit handling failed.", { cause, threadId: ctx.threadId }),
+            Effect.logError("Agy process exit handling failed.", {
+              cause,
+              threadId: ctx.threadId,
+            }),
           ),
           Effect.forkChild,
         );
 
-        ctx.turns.push({ id: turnId, items: [] });
-        return { threadId: ctx.threadId, turnId, resumeCursor: resumeCursorFor(ctx) };
+        return proc;
       });
 
-    const killActiveTurnChild = (turn: AgyActiveTurn): Effect.Effect<void> =>
-      turn.child
-        .kill({ killSignal: "SIGTERM", forceKillAfter: "1 second" })
-        .pipe(Effect.catchCause(() => Effect.void));
+    const ensureAgySessionProc = (ctx: AgySessionContext, model: string | undefined) =>
+      Effect.gen(function* () {
+        const existing = ctx.sessionProc;
+        if (existing) {
+          // agy pins the model per process; a switch respawns the idle
+          // process and resumes the same conversation via `--conversation`.
+          if (existing.model === model) return existing;
+          ctx.sessionProc = undefined;
+          yield* killProc(existing);
+        }
+        return yield* spawnAgySessionProc(ctx, model);
+      });
 
     const stopSessionInternal = (ctx: AgySessionContext): Effect.Effect<void> =>
       Effect.gen(function* () {
@@ -618,7 +653,10 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
         const activeTurn = ctx.activeTurn;
         if (activeTurn) {
           activeTurn.interrupted = true;
-          yield* killActiveTurnChild(activeTurn);
+        }
+        const proc = ctx.sessionProc;
+        if (proc) {
+          yield* killProc(proc);
         }
         sessions.delete(ctx.threadId);
         yield* offerRuntimeEvent({
@@ -682,6 +720,7 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
           session,
           cwd,
           conversationId: resumeConversationId,
+          sessionProc: undefined,
           activeTurn: undefined,
           turns: [],
           stopped: false,
@@ -702,7 +741,7 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
           provider: PROVIDER,
           providerInstanceId: boundInstanceId,
           threadId: input.threadId,
-          payload: { state: "ready", reason: "Agy headless session ready" },
+          payload: { state: "ready", reason: "Agy session ready" },
         });
         yield* offerRuntimeEvent({
           type: "thread.started",
@@ -715,12 +754,96 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
         return session;
       });
 
+    const beginTurn = (ctx: AgySessionContext, input: ProviderSendTurnInput) =>
+      Effect.gen(function* () {
+        const prompt = input.input?.trim();
+        if (!prompt) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: "Turn requires non-empty text input.",
+          });
+        }
+        if (input.attachments && input.attachments.length > 0) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: "Attachments are not supported by the Agy adapter yet.",
+          });
+        }
+
+        const modelSelection =
+          input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
+        const model = modelSelection?.model?.trim() || undefined;
+
+        // Steering: agy consumes one turn per stdin message and needs the
+        // previous result first, so queue the prompt behind the active turn.
+        // It continues the same T3 turn when agy reports its next result —
+        // the same queued-message behavior as the official IDE extensions.
+        if (ctx.activeTurn && !ctx.activeTurn.settled) {
+          const activeTurn = ctx.activeTurn;
+          activeTurn.pendingSteers.push(prompt);
+          ctx.session = { ...ctx.session, updatedAt: yield* nowIso };
+          return {
+            threadId: ctx.threadId,
+            turnId: activeTurn.turnId,
+            resumeCursor: resumeCursorFor(ctx),
+          };
+        }
+
+        const turnId = TurnId.make(yield* randomUUIDv4);
+        const turn: AgyActiveTurn = {
+          turnId,
+          pendingSteers: [],
+          interrupted: false,
+          settled: false,
+          assistantItemId: undefined,
+          assistantItemCompleted: false,
+        };
+        ctx.activeTurn = turn;
+
+        const proc = yield* ensureAgySessionProc(ctx, model).pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              ctx.activeTurn = undefined;
+            }),
+          ),
+        );
+        yield* writeToAgyStdin(ctx, proc.child, prompt).pipe(
+          Effect.tapError(() =>
+            Effect.sync(() => {
+              ctx.activeTurn = undefined;
+            }),
+          ),
+        );
+
+        ctx.session = {
+          ...ctx.session,
+          status: "running",
+          activeTurnId: turnId,
+          updatedAt: yield* nowIso,
+          ...(model ? { model } : {}),
+        };
+        yield* offerRuntimeEvent({
+          type: "turn.started",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          providerInstanceId: boundInstanceId,
+          threadId: ctx.threadId,
+          turnId,
+          payload: model ? { model } : {},
+        });
+
+        ctx.turns.push({ id: turnId, items: [] });
+        return { threadId: ctx.threadId, turnId, resumeCursor: resumeCursorFor(ctx) };
+      });
+
     const sendTurn: AgyAdapterShape["sendTurn"] = (input) =>
       withThreadLock(
         input.threadId,
         Effect.gen(function* () {
           const ctx = yield* requireSession(input.threadId);
-          return yield* runTurn(ctx, input);
+          return yield* beginTurn(ctx, input);
         }),
       );
 
@@ -733,7 +856,16 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
           const turn = ctx.activeTurn;
           if (!turn || turn.settled) return;
           turn.interrupted = true;
-          yield* killActiveTurnChild(turn);
+          turn.pendingSteers.length = 0;
+          const proc = ctx.sessionProc;
+          if (proc) {
+            // Killing the process ends the in-flight agy turn; the exit
+            // handler settles the T3 turn as cancelled. The next send
+            // respawns and resumes via `--conversation`.
+            yield* killProc(proc);
+          } else {
+            yield* settleTurn(ctx, turn, { state: "cancelled" });
+          }
         }),
       );
 
@@ -775,7 +907,7 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
           provider: PROVIDER,
           method: "rollbackThread",
           detail:
-            "Rollback is not supported by the Agy headless adapter; agy conversations are resumed server-side and cannot be rewound from the CLI.",
+            "Rollback is not supported by the Agy adapter; agy conversations are resumed server-side and cannot be rewound from the CLI.",
         }),
       );
 
@@ -797,7 +929,7 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
             provider: PROVIDER,
             method: "respondToRequest",
             detail:
-              "Interactive approvals are not available in agy headless mode; tools that require approval are soft-denied by the CLI. Grant tools via permissions.allow in ~/.gemini/antigravity-cli/settings.json.",
+              "Interactive approvals are not available over the Agy CLI interface; tools that require approval are soft-denied by the CLI. Grant tools via permissions.allow in ~/.gemini/antigravity-cli/settings.json.",
           }),
         ),
       respondToUserInput: () =>
@@ -805,7 +937,7 @@ export function makeAgyAdapter(agySettings: AgySettings, options?: AgyAdapterLiv
           new ProviderAdapterRequestError({
             provider: PROVIDER,
             method: "respondToUserInput",
-            detail: "Structured user input is not available in agy headless mode.",
+            detail: "Structured user input is not available over the Agy CLI interface.",
           }),
         ),
       stopSession,

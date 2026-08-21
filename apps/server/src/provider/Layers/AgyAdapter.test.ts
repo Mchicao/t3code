@@ -1,6 +1,21 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { parseAgyResume, usageFromAgy } from "./AgyAdapter.ts";
+import { agyUserEventLine, parseAgyResume, usageFromAgy } from "./AgyAdapter.ts";
+
+describe("agyUserEventLine", () => {
+  it("wraps a prompt as the NDJSON user event stream-json mode consumes", () => {
+    expect(JSON.parse(agyUserEventLine("hola mundo"))).toEqual({
+      event: "user",
+      message: { content: "hola mundo" },
+    });
+  });
+
+  it("escapes newlines inside the prompt so one line is one event", () => {
+    const line = agyUserEventLine("linea1\nlinea2");
+    expect(line.split("\n")).toHaveLength(1);
+    expect(JSON.parse(line).message.content).toBe("linea1\nlinea2");
+  });
+});
 
 describe("parseAgyResume", () => {
   it("accepts a v1 cursor with a conversation id", () => {
