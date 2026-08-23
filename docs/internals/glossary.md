@@ -9,6 +9,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Project and workspace](#project-and-workspace)
 - [Thread timeline](#thread-timeline)
 - [Orchestration](#orchestration)
+- [Remote workflow control](#remote-workflow-control)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
 
@@ -87,6 +88,50 @@ A typed signal emitted when an async milestone completes, such as `checkpoint.ba
 #### Quiesced
 
 "Quiesced" means a turn has gone quiet and stable: follow-up work such as [CheckpointReactor.ts][6] has settled. It appears in [the receipt schema][13], so in practice it is something tests wait on rather than a production signal.
+
+### Remote workflow control
+
+#### Execution environment
+
+One running T3 server and the machine, provider credentials, projects, and execution state it owns. A remote environment is still one T3 runtime boundary; the connection method does not create a second runtime.
+
+#### Remote SWARMS run
+
+One SWARMS workflow submitted to exactly one project in exactly one remote execution environment.
+
+#### Workflow plan
+
+The opaque SWARMS JSON document that describes the stages, tasks, routes, and limits for one remote SWARMS run.
+
+#### Worker task
+
+One unit in a workflow plan that SWARMS schedules and executes through a configured provider transport.
+
+#### Control plane
+
+The T3 side of remote workflow control: authentication, project selection, run lifecycle commands, and public run snapshots.
+
+#### Execution plane
+
+The SWARMS side of remote workflow control: scheduling, provider execution, concurrency, task state, artifacts, and reports.
+
+#### Relationships
+
+- A **Control plane** operates one **Execution environment** through an authenticated T3 connection.
+- A **Remote SWARMS run** belongs to exactly one **Execution environment** and one environment-local **Project**.
+- A **Remote SWARMS run** contains one **Workflow plan** and one or more **Worker tasks**.
+- The **Control plane** starts, reads, and cancels a **Remote SWARMS run**; the **Execution plane** owns its task state and report.
+
+#### Example dialogue
+
+> **Dev:** "Does launching ten workers create ten T3 threads?"
+> **Domain expert:** "No. v1 creates one **Remote SWARMS run** containing ten **Worker tasks**. T3 tracks the run; SWARMS schedules the tasks."
+
+#### Flagged ambiguities
+
+- "Agent" was used for both a T3 provider session and a SWARMS task. Use **Worker task** for the scheduled unit and **Provider** for the runtime that executes it.
+- "Remote" describes the target **Execution environment**, not the relay. T3 Connect is only the access method.
+- "Cancelled" means the worker process termination outcome was observed; a cancellation request alone is not a cancelled run.
 
 ### Provider runtime
 
