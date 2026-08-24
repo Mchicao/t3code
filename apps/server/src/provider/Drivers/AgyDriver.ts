@@ -3,9 +3,8 @@
  *
  * Wraps the `agy` binary in its documented headless mode (see
  * {@link ../Layers/AgyAdapter}) so each instance is one `agy` installation
- * addressed by `binaryPath`. No persistent process is owned by the driver —
- * one child per turn — so instances share nothing but the CLI's own
- * credential cache.
+ * addressed by `binaryPath`. The adapter owns one persistent stream-json
+ * process per live thread and resumes the conversation after a respawn.
  *
  * @module provider/Drivers/AgyDriver
  */
@@ -19,6 +18,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { makeAgyTextGeneration } from "../../textGeneration/AgyTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
+import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAgyAdapter } from "../Layers/AgyAdapter.ts";
@@ -60,6 +60,7 @@ export type AgyDriverEnv =
   | FileSystem.FileSystem
   | Path.Path
   | ProviderEventLoggers
+  | ServerConfig
   | ServerSettingsService;
 
 const withInstanceIdentity =

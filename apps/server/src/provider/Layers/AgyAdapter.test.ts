@@ -1,6 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { agyUserEventLine, parseAgyResume, usageFromAgy } from "./AgyAdapter.ts";
+import {
+  agyUserEventLine,
+  appendAgyImageAttachments,
+  parseAgyResume,
+  usageFromAgy,
+} from "./AgyAdapter.ts";
 
 describe("agyUserEventLine", () => {
   it("wraps a prompt as the NDJSON user event stream-json mode consumes", () => {
@@ -34,7 +39,7 @@ describe("parseAgyResume", () => {
 });
 
 describe("usageFromAgy", () => {
-  it("maps agy usage fields onto the canonical snapshot", () => {
+  it("adds cache reads back into canonical input/context usage", () => {
     const usage = usageFromAgy({
       input_tokens: 10415,
       output_tokens: 657,
@@ -43,16 +48,62 @@ describe("usageFromAgy", () => {
       total_tokens: 11072,
     }) as Record<string, unknown>;
     expect(usage).toBeDefined();
-    expect(usage.usedTokens).toBe(11072);
-    expect(usage.inputTokens).toBe(10415);
+    expect(usage.usedTokens).toBe(19185);
+    expect(usage.inputTokens).toBe(18528);
     expect(usage.outputTokens).toBe(657);
     expect(usage.reasoningOutputTokens).toBe(616);
     expect(usage.cachedInputTokens).toBe(8113);
+    expect(usage.lastInputTokens).toBe(18528);
+  });
+
+  it("turns cumulative persistent-session results into per-turn usage", () => {
+    const usage = usageFromAgy(
+      {
+        input_tokens: 30662,
+        output_tokens: 8,
+        thinking_tokens: 0,
+        cache_read_tokens: 30214,
+        total_tokens: 30670,
+      },
+      {
+        cumulativeResult: true,
+        previousCumulative: {
+          input_tokens: 30384,
+          output_tokens: 4,
+          thinking_tokens: 0,
+          cache_read_tokens: 0,
+          total_tokens: 30388,
+        },
+      },
+    ) as Record<string, unknown>;
+
+    expect(usage.usedTokens).toBe(30496);
+    expect(usage.inputTokens).toBe(30492);
+    expect(usage.cachedInputTokens).toBe(30214);
+    expect(usage.outputTokens).toBe(4);
+    expect(usage.totalProcessedTokens).toBe(30670);
   });
 
   it("returns undefined for non-object or non-numeric payloads", () => {
     expect(usageFromAgy(undefined)).toBeUndefined();
     expect(usageFromAgy("nope")).toBeUndefined();
-    expect(usageFromAgy({ total_tokens: "lots" })).toMatchObject({ usedTokens: 0 });
+    expect(usageFromAgy({ total_tokens: "lots" })).toBeUndefined();
+  });
+});
+
+describe("appendAgyImageAttachments", () => {
+  it("projects image metadata as a delimited path manifest", () => {
+    const prompt = appendAgyImageAttachments("Review this screenshot", [
+      {
+        name: "screen.png",
+        mimeType: "image/png",
+        sizeBytes: 1234,
+        path: "/tmp/t3/attachments/abc.png",
+      },
+    ]);
+    expect(prompt).toContain("Review this screenshot");
+    expect(prompt).toContain("<t3_attached_images>");
+    expect(prompt).toContain('"path":"/tmp/t3/attachments/abc.png"');
+    expect(prompt).toContain('"mimeType":"image/png"');
   });
 });

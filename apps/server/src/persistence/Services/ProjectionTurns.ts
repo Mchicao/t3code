@@ -94,6 +94,13 @@ export const GetProjectionPendingTurnStartInput = Schema.Struct({
 });
 export type GetProjectionPendingTurnStartInput = typeof GetProjectionPendingTurnStartInput.Type;
 
+export const DeleteProjectionPendingTurnStartByMessageIdInput = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+});
+export type DeleteProjectionPendingTurnStartByMessageIdInput =
+  typeof DeleteProjectionPendingTurnStartByMessageIdInput.Type;
+
 export const DeleteProjectionTurnsByThreadInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -107,58 +114,52 @@ export const ClearCheckpointTurnConflictInput = Schema.Struct({
 export type ClearCheckpointTurnConflictInput = typeof ClearCheckpointTurnConflictInput.Type;
 
 export interface ProjectionTurnRepositoryShape {
-  /**
-   * Inserts or updates the canonical row for a concrete `{threadId, turnId}` turn lifecycle state.
-   */
   readonly upsertByTurnId: (
     row: ProjectionTurnById,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
+  /** Appends a pending-start placeholder. Pending starts are consumed FIFO. */
+  readonly enqueuePendingTurnStart: (
+    row: ProjectionPendingTurnStart,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
   /**
-   * Replaces any existing pending-start placeholder rows for a thread with exactly one latest pending-start row.
+   * Compatibility entry point used by the existing projector. It now appends
+   * instead of replacing so multiple follow-up prompts can coexist.
    */
   readonly replacePendingTurnStart: (
     row: ProjectionPendingTurnStart,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /**
-   * Returns the newest pending-start placeholder for a thread; this is expected to be at most one row after replacement writes.
-   */
+  /** Returns the oldest pending-start placeholder for a thread. */
   readonly getPendingTurnStartByThreadId: (
     input: GetProjectionPendingTurnStartInput,
   ) => Effect.Effect<Option.Option<ProjectionPendingTurnStart>, ProjectionRepositoryError>;
 
   /**
-   * Deletes only pending-start placeholder rows (`turnId = null`) for a thread and leaves concrete turn rows untouched.
+   * Consumes the oldest pending start while the projected session is running;
+   * for terminal/non-running sessions it clears every pending start.
    */
   readonly deletePendingTurnStartByThreadId: (
     input: GetProjectionPendingTurnStartInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /**
-   * Lists all projection rows for a thread, including pending placeholders, with checkpoint rows ordered before non-checkpoint rows.
-   */
+  readonly deletePendingTurnStartByMessageId: (
+    input: DeleteProjectionPendingTurnStartByMessageIdInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
   readonly listByThreadId: (
     input: ListProjectionTurnsByThreadInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionTurn>, ProjectionRepositoryError>;
 
-  /**
-   * Looks up a concrete turn row by `{threadId, turnId}` and never returns pending placeholder rows.
-   */
   readonly getByTurnId: (
     input: GetProjectionTurnByTurnIdInput,
   ) => Effect.Effect<Option.Option<ProjectionTurnById>, ProjectionRepositoryError>;
 
-  /**
-   * Clears checkpoint fields on conflicting rows that reuse the same checkpoint turn count in a thread, excluding the provided turn.
-   */
   readonly clearCheckpointTurnConflict: (
     input: ClearCheckpointTurnConflictInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /**
-   * Hard-deletes all projection rows for a thread, including pending-start placeholders and checkpoint metadata rows.
-   */
   readonly deleteByThreadId: (
     input: DeleteProjectionTurnsByThreadInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

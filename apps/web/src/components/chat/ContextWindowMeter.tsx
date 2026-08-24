@@ -1,7 +1,10 @@
 import { Button } from "../ui/button";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
+import {
+  formatContextWindowCompactionMessage,
+  resolveContextWindowTokenBreakdown,
+} from "./ContextWindowMeter.logic";
 
 function formatPercentage(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) {
@@ -25,6 +28,8 @@ export function ContextWindowMeter(props: {
   const dashOffset = circumference * (1 - normalizedPercentage / 100);
   const totalProcessedTokens = usage.totalProcessedTokens ?? null;
   const showTotalProcessed = totalProcessedTokens !== null && totalProcessedTokens > 0;
+  const tokenBreakdown = resolveContextWindowTokenBreakdown(usage);
+  const cachePercentage = formatPercentage(tokenBreakdown.cachePercentage);
   const isOverloaded = normalizedPercentage > 90;
   const usageColor = isOverloaded
     ? "var(--color-error)"
@@ -87,7 +92,12 @@ export function ContextWindowMeter(props: {
       >
         <div className="flex flex-col gap-2 p-[var(--floating-content-inset)]">
           <div className="flex items-center justify-between gap-3">
-            <div className="font-medium text-muted-foreground text-xs">Context Window</div>
+            <div className="min-w-0">
+              <div className="font-medium text-muted-foreground text-xs">Context Window</div>
+              {modelDisplayName ? (
+                <div className="truncate text-secondary-label text-[10px]">{modelDisplayName}</div>
+              ) : null}
+            </div>
             {usage.maxTokens !== null && usedPercentage ? (
               <div className="text-secondary-label text-[11px] tabular-nums">
                 <span>{usedPercentage}</span>
@@ -118,6 +128,42 @@ export function ContextWindowMeter(props: {
               />
             </div>
           ) : null}
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 border-t border-border/60 pt-2 text-[11px] leading-4">
+            {tokenBreakdown.inputTokens !== null ? (
+              <>
+                <span className="text-secondary-label">Input</span>
+                <span className="text-right font-medium tabular-nums text-secondary-label">
+                  {formatContextWindowTokens(tokenBreakdown.inputTokens)}
+                </span>
+              </>
+            ) : null}
+            {tokenBreakdown.cachedInputTokens !== null ? (
+              <>
+                <span className="text-secondary-label">Cached</span>
+                <span className="text-right font-medium tabular-nums text-secondary-label">
+                  {formatContextWindowTokens(tokenBreakdown.cachedInputTokens)}
+                  {cachePercentage ? ` · ${cachePercentage}` : ""}
+                </span>
+              </>
+            ) : null}
+            {tokenBreakdown.outputTokens !== null ? (
+              <>
+                <span className="text-secondary-label">Output</span>
+                <span className="text-right font-medium tabular-nums text-secondary-label">
+                  {formatContextWindowTokens(tokenBreakdown.outputTokens)}
+                </span>
+              </>
+            ) : null}
+            {tokenBreakdown.reasoningOutputTokens !== null &&
+            tokenBreakdown.reasoningOutputTokens > 0 ? (
+              <>
+                <span className="text-secondary-label">Reasoning</span>
+                <span className="text-right font-medium tabular-nums text-secondary-label">
+                  {formatContextWindowTokens(tokenBreakdown.reasoningOutputTokens)}
+                </span>
+              </>
+            ) : null}
+          </div>
           {showTotalProcessed ? (
             <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
               <span className="text-secondary-label">Total processed</span>
