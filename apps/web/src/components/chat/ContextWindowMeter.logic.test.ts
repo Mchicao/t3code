@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   formatContextWindowCompactionMessage,
   resolveContextWindowModelDisplayName,
+  resolveContextWindowTokenBreakdown,
 } from "./ContextWindowMeter.logic";
 
 describe("resolveContextWindowModelDisplayName", () => {
@@ -54,5 +55,39 @@ describe("formatContextWindowCompactionMessage", () => {
     expect(formatContextWindowCompactionMessage(null)).toBe(
       "Context compacts automatically when needed.",
     );
+  });
+});
+
+describe("resolveContextWindowTokenBreakdown", () => {
+  it("uses latest-turn counters and derives cache hit percentage", () => {
+    expect(
+      resolveContextWindowTokenBreakdown({
+        usedTokens: 30_496,
+        totalProcessedTokens: 30_670,
+        maxTokens: null,
+        inputTokens: 30_492,
+        cachedInputTokens: 30_214,
+        outputTokens: 4,
+        reasoningOutputTokens: 0,
+        lastUsedTokens: 30_496,
+        lastInputTokens: 30_492,
+        lastCachedInputTokens: 30_214,
+        lastOutputTokens: 4,
+        lastReasoningOutputTokens: 0,
+        toolUses: null,
+        durationMs: null,
+        compactsAutomatically: false,
+        remainingTokens: null,
+        usedPercentage: null,
+        remainingPercentage: null,
+        updatedAt: "2026-08-24T00:00:00.000Z",
+      }),
+    ).toEqual({
+      inputTokens: 30_492,
+      cachedInputTokens: 30_214,
+      cachePercentage: (30_214 / 30_492) * 100,
+      outputTokens: 4,
+      reasoningOutputTokens: 0,
+    });
   });
 });
