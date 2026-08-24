@@ -30,6 +30,12 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /**
+   * Requests immediate projection of assistant text deltas for providers with
+   * a documented native stream. Providers that omit this keep the server-wide
+   * buffering preference.
+   */
+  readonly assistantDeliveryMode?: "streaming";
 }
 
 export interface ProviderThreadTurnSnapshot {
