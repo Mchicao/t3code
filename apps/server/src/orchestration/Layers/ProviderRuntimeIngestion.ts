@@ -263,7 +263,7 @@ function sessionStatusAllowsActiveTurn(
 
 function requestKindFromCanonicalRequestType(
   requestType: string | undefined,
-): "command" | "file-read" | "file-change" | undefined {
+): "command" | "file-read" | "file-change" | "mcp-elicitation" | undefined {
   switch (requestType) {
     case "command_execution_approval":
     case "exec_command_approval":
@@ -273,6 +273,8 @@ function requestKindFromCanonicalRequestType(
     case "file_change_approval":
     case "apply_patch_approval":
       return "file-change";
+    case "mcp_elicitation_approval":
+      return "mcp-elicitation";
     default:
       return undefined;
   }
@@ -340,12 +342,16 @@ export function runtimeEventToActivities(
                 ? "File-read approval requested"
                 : requestKind === "file-change"
                   ? "File-change approval requested"
-                  : "Approval requested",
+                  : requestKind === "mcp-elicitation"
+                    ? "App access approval requested"
+                    : "Approval requested",
           payload: {
             requestId: toApprovalRequestId(event.requestId),
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.detail ? { detail: event.payload.detail } : {}),
+            ...(event.payload.appName ? { appName: event.payload.appName } : {}),
+            ...(event.payload.options ? { options: event.payload.options } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -779,7 +785,7 @@ const make = Effect.gen(function* () {
 
   const resolveAssistantDeliveryMode = Effect.fn("resolveAssistantDeliveryMode")(function* (
     event: ProviderRuntimeEvent,
-  ): Effect.fn.Return<AssistantDeliveryMode> {
+  ) {
     const settings = yield* serverSettingsService.getSettings;
     if (settings.enableLegacyTokenStreaming) return "streaming";
     if (event.providerInstanceId === undefined) return "buffered";
@@ -996,7 +1002,8 @@ const make = Effect.gen(function* () {
     );
   const clearBufferedProposedPlan = (planId: string) =>
     Cache.invalidate(bufferedProposedPlanById, planId);
-  const clearAssistantMessageState = (messageId: MessageId) => clearBufferedAssistantText(messageId);
+  const clearAssistantMessageState = (messageId: MessageId) =>
+    clearBufferedAssistantText(messageId);
 
   const flushBufferedAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
@@ -1028,7 +1035,10 @@ const make = Effect.gen(function* () {
     commandTag: string;
   }) =>
     Effect.gen(function* () {
-      const assistantMessageIds = yield* getAssistantMessageIdsForTurn(input.threadId, input.turnId);
+      const assistantMessageIds = yield* getAssistantMessageIdsForTurn(
+        input.threadId,
+        input.turnId,
+      );
       const flushedMessageIds = new Set<MessageId>();
       yield* Effect.forEach(
         assistantMessageIds,
@@ -1105,7 +1115,10 @@ const make = Effect.gen(function* () {
     flushedMessageIds?: ReadonlySet<MessageId>;
   }) =>
     Effect.gen(function* () {
-      const activeMessageId = yield* getActiveAssistantMessageIdForTurn(input.threadId, input.turnId);
+      const activeMessageId = yield* getActiveAssistantMessageIdForTurn(
+        input.threadId,
+        input.turnId,
+      );
       if (Option.isNone(activeMessageId)) return;
       yield* finalizeAssistantMessage({
         event: input.event,
@@ -1226,7 +1239,9 @@ const make = Effect.gen(function* () {
       yield* Effect.forEach(
         assistantSegmentKeys,
         (key) =>
-          key.startsWith(prefix) ? Cache.invalidate(assistantSegmentStateByTurnKey, key) : Effect.void,
+          key.startsWith(prefix)
+            ? Cache.invalidate(assistantSegmentStateByTurnKey, key)
+            : Effect.void,
         { concurrency: 1 },
       ).pipe(Effect.asVoid);
       yield* Effect.forEach(
@@ -1370,7 +1385,9 @@ const make = Effect.gen(function* () {
             case "session.exited":
               return "stopped";
             case "turn.completed":
-              return normalizeRuntimeTurnState(event.payload.state) === "failed" ? "error" : "ready";
+              return normalizeRuntimeTurnState(event.payload.state) === "failed"
+                ? "error"
+                : "ready";
             case "session.started":
             case "thread.started":
               return activeTurnId !== null ? "running" : hasPendingTurnStart ? "starting" : "ready";
@@ -1526,7 +1543,9 @@ const make = Effect.gen(function* () {
       const assistantCompletion =
         event.type === "item.completed" && event.payload.itemType === "assistant_message"
           ? {
-              messageId: MessageId.make(`assistant:${event.itemId ?? event.turnId ?? event.eventId}`),
+              messageId: MessageId.make(
+                `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,
+              ),
               fallbackText: event.payload.detail,
             }
           : undefined;
@@ -1695,7 +1714,8 @@ const make = Effect.gen(function* () {
       }
       if (event.type === "task.started" || event.type === "task.progress") {
         const description = event.payload.description?.trim();
-        if (description) yield* rememberTaskDescription(thread.id, event.payload.taskId, description);
+        if (description)
+          yield* rememberTaskDescription(thread.id, event.payload.taskId, description);
       }
       if (event.type === "session.exited") {
         threadPlanProgress.clearThreadPlanProgress(thread.id);

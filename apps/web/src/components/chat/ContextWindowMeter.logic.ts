@@ -36,15 +36,13 @@ export type ContextWindowTokenBreakdown = {
 export function resolveContextWindowTokenBreakdown(
   usage: ContextWindowSnapshot,
 ): ContextWindowTokenBreakdown {
-  const inputTokens = usage.lastInputTokens ?? usage.inputTokens;
-  const cachedInputTokens = usage.lastCachedInputTokens ?? usage.cachedInputTokens;
-  const outputTokens = usage.lastOutputTokens ?? usage.outputTokens;
-  const reasoningOutputTokens = usage.lastReasoningOutputTokens ?? usage.reasoningOutputTokens;
+  const inputTokens = usage.lastInputTokens ?? usage.inputTokens ?? null;
+  const cachedInputTokens = usage.lastCachedInputTokens ?? usage.cachedInputTokens ?? null;
+  const outputTokens = usage.lastOutputTokens ?? usage.outputTokens ?? null;
+  const reasoningOutputTokens =
+    usage.lastReasoningOutputTokens ?? usage.reasoningOutputTokens ?? null;
   const cachePercentage =
-    inputTokens !== null &&
-    inputTokens > 0 &&
-    cachedInputTokens !== null &&
-    cachedInputTokens >= 0
+    inputTokens !== null && inputTokens > 0 && cachedInputTokens !== null && cachedInputTokens >= 0
       ? Math.max(0, Math.min(100, (cachedInputTokens / inputTokens) * 100))
       : null;
 
