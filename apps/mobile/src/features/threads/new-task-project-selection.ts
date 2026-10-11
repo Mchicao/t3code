@@ -26,7 +26,7 @@ export function resolveProjectSubtitle(input: {
   const root = input.workspaceRoot.trim();
   const env = input.environmentLabel?.trim();
   if (env && root) {
-    return `${env} · ${root}`;
+    return `${env}\n${root}`;
   }
   return env || root;
 }

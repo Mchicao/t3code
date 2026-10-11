@@ -79,7 +79,7 @@ describe("resolveProjectSubtitle", () => {
         workspaceRoot: "C:\\Proyectos\\t3code",
         environmentLabel: "Desktop",
       }),
-    ).toBe("Desktop · C:\\Proyectos\\t3code");
+    ).toBe("Desktop\nC:\\Proyectos\\t3code");
   });
 
   it("falls back to workspace root when environment label is null or whitespace", () => {
