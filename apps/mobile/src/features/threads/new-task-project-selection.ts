@@ -31,6 +31,29 @@ export function resolveProjectSubtitle(input: {
   return env || root;
 }
 
+function createEnvironmentLabelResolver(
+  environmentLabels?: ReadonlyMap<EnvironmentId, string> | Record<string, string>,
+): (environmentId: EnvironmentId) => string | undefined {
+  if (!environmentLabels) return () => undefined;
+  if (environmentLabels instanceof Map) {
+    return (environmentId) => environmentLabels.get(environmentId);
+  }
+  return (environmentId) => (environmentLabels as Record<string, string>)[environmentId];
+}
+
+function projectMatchesSearch(
+  project: EnvironmentProject,
+  query: string,
+  resolveEnvironmentLabel: (environmentId: EnvironmentId) => string | undefined,
+): boolean {
+  const envLabel = resolveEnvironmentLabel(project.environmentId)?.toLowerCase();
+  return (
+    project.title.toLowerCase().includes(query) ||
+    project.workspaceRoot.toLowerCase().includes(query) ||
+    (envLabel !== undefined && envLabel.includes(query))
+  );
+}
+
 export function filterProjectScopes(
   scopes: ReadonlyArray<HomeProjectScope>,
   searchText: string,
@@ -39,25 +62,13 @@ export function filterProjectScopes(
   const query = searchText.trim().toLowerCase();
   if (!query) return scopes;
 
-  const resolveEnvLabel = (envId: EnvironmentId): string | undefined => {
-    if (!environmentLabels) return undefined;
-    if (environmentLabels instanceof Map) {
-      return environmentLabels.get(envId);
-    }
-    return (environmentLabels as Record<string, string>)[envId];
-  };
-
+  const resolveEnvironmentLabel = createEnvironmentLabelResolver(environmentLabels);
   return scopes.filter(
     (scope) =>
       scope.title.toLowerCase().includes(query) ||
-      scope.projects.some((project) => {
-        const envLabel = resolveEnvLabel(project.environmentId)?.toLowerCase();
-        return (
-          project.title.toLowerCase().includes(query) ||
-          project.workspaceRoot.toLowerCase().includes(query) ||
-          (envLabel !== undefined && envLabel.includes(query))
-        );
-      }),
+      scope.projects.some((project) =>
+        projectMatchesSearch(project, query, resolveEnvironmentLabel),
+      ),
   );
 }
 
@@ -72,22 +83,10 @@ export function filterProjectsInScope(
     return projects;
   }
 
-  const resolveEnvLabel = (envId: EnvironmentId): string | undefined => {
-    if (!environmentLabels) return undefined;
-    if (environmentLabels instanceof Map) {
-      return environmentLabels.get(envId);
-    }
-    return (environmentLabels as Record<string, string>)[envId];
-  };
-
-  return projects.filter((project) => {
-    const envLabel = resolveEnvLabel(project.environmentId)?.toLowerCase();
-    return (
-      project.title.toLowerCase().includes(query) ||
-      project.workspaceRoot.toLowerCase().includes(query) ||
-      (envLabel !== undefined && envLabel.includes(query))
-    );
-  });
+  const resolveEnvironmentLabel = createEnvironmentLabelResolver(environmentLabels);
+  return projects.filter((project) =>
+    projectMatchesSearch(project, query, resolveEnvironmentLabel),
+  );
 }
 
 function getOnlySelectableProject(
